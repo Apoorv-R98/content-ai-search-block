@@ -5,6 +5,47 @@ const TAB_RESULTS = 'search-results';
 const TAB_AI = 'ai-mode';
 const MAX_RESULTS_SIZE = 50;
 const MAX_TOP_UP_REQUESTS = 3;
+// Candidate pool of the vector query. Also caps how many results can be paged through
+// for queries the full-text query does not match, so keep it well above the page size.
+const VECTOR_NUM_CANDIDATES = 50;
+// Only the result fields the block reads (paths are relative to each result's "data").
+const RESULT_FIELDS = [
+  'text',
+  'source',
+  'title',
+  'name',
+  'metadata.url',
+  'metadata.source',
+  'metadata.title',
+  'metadata.description',
+  'metadata.image',
+  'metadata.meta.image',
+];
+// Pages without a meta description fall back to the start of their text.
+const EXCERPT_LENGTH = 160;
+const MIN_EXCERPT_LINE = 40;
+
+function stripMarkdown(line) {
+  return line
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^[\s>#*\-+\d.)]+/, '')
+    .replace(/[*_`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function excerptFromText(value, title = '', length = EXCERPT_LENGTH) {
+  if (typeof value !== 'string') return '';
+  const heading = String(title).trim().toLowerCase();
+  const line = value.split('\n')
+    .map(stripMarkdown)
+    .find((l) => l.length >= MIN_EXCERPT_LINE && l.toLowerCase() !== heading);
+  if (!line) return '';
+  if (line.length <= length) return line;
+  const cut = line.slice(0, length);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), 1)).replace(/[\s,;:.-]+$/, '')}…`;
+}
 
 async function fetchMockAnswer() {
   const url = `${window.hlx.codeBasePath}/blocks/content-ai-search/mock-answer.json`;
@@ -34,6 +75,28 @@ async function fetchSearchAnswer(baseUrl, contentSource, contentSourceType, quer
   return resp.json();
 }
 
+// Longer, natural-language queries are better served by the semantic vector match than by
+// literal term matching, so the full-text boost shrinks with the number of words.
+function fulltextBoost(query) {
+  const tokens = query.trim().split(/\s+/).length;
+  return tokens > 1 ? 1 / (5 * tokens) : 1;
+}
+
+function buildSearchQuery(text) {
+  return {
+    type: 'composite',
+    operator: 'OR',
+    queries: [
+      { type: 'vector', text, options: { numCandidates: VECTOR_NUM_CANDIDATES, boost: 1 } },
+      {
+        type: 'fulltext',
+        text,
+        options: { boost: fulltextBoost(text), operator: 'AND', matchStrategy: 'COMBINED_FIELDS' },
+      },
+    ],
+  };
+}
+
 async function fetchSearchResults(baseUrl, contentSource, contentSourceType, query, limit, cursor) {
   const url = `${baseUrl}/search`;
   const resp = await fetch(url, {
@@ -41,8 +104,9 @@ async function fetchSearchResults(baseUrl, contentSource, contentSourceType, que
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contentSource: { name: contentSource, type: contentSourceType },
-      query: { type: 'vector', text: query, options: {} },
+      query: buildSearchQuery(query),
       queryOptions: {
+        resultFields: { includes: RESULT_FIELDS },
         pagination: {
           limit,
           ...(cursor ? { cursor } : {}),
@@ -64,11 +128,24 @@ function resolveMetadataUrl(meta) {
   return (meta && (meta.url || meta.source)) || '';
 }
 
+const DOCUMENT_EXT = /\.(pdf|docx?|pptx?|xlsx?)$/i;
+
 function labelFromUrl(url) {
   try {
     const parsed = new URL(url, window.location.origin);
     const segments = parsed.pathname.split('/').filter(Boolean);
     if (!segments.length) return url;
+    // Document URLs can end in an id (…/Report.pdf/dc1fa6af-…), so use the file name segment.
+    const file = [...segments].reverse().find((segment) => DOCUMENT_EXT.test(segment));
+    if (file) {
+      const name = decodeURIComponent(file.replace(/\+/g, ' '))
+        .replace(DOCUMENT_EXT, '')
+        .replace(/^\(\w+\)\s*/, '')
+        .replace(/[-_]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (name) return name;
+    }
     const slug = decodeURIComponent(segments[segments.length - 1])
       .replace(/\.(html?|php|aspx?)$/i, '')
       .replace(/[-_]+/g, ' ')
@@ -146,14 +223,28 @@ function renderMarkdownSummary(text) {
   return html;
 }
 
+// Skip-link anchors (page#main-content) point at the same page, so a crawl that indexed
+// them as separate documents would otherwise show the page twice.
+const SKIP_ANCHORS = ['#main-content', '#main', '#content', '#maincontent', '#skip-to-content'];
+
+function isSkipAnchor(hash) {
+  return SKIP_ANCHORS.includes(String(hash).toLowerCase());
+}
+
+function stripSkipAnchor(url) {
+  const index = String(url).indexOf('#');
+  return index >= 0 && isSkipAnchor(url.slice(index)) ? url.slice(0, index) : url;
+}
+
 function renderResultItem(item, layout) {
   const data = item.data || {};
   const meta = data.metadata || {};
   const url = data.source || resolveMetadataUrl(meta);
-  const title = meta.title || url || item.id || 'Untitled';
-  const description = meta.description || '';
+  const title = meta.title || (url ? labelFromUrl(url) : '') || item.id || 'Untitled';
+  const description = (typeof meta.description === 'string' && meta.description.trim())
+    || excerptFromText(data.text, title);
   const image = meta.image || '';
-  const href = isSafeUrl(url) ? url : '#';
+  const href = isSafeUrl(url) ? stripSkipAnchor(url) : '#';
 
   const li = document.createElement('li');
   li.className = 'cmp-content-ai-search__item';
@@ -244,7 +335,7 @@ function resolveResultIdentity(item) {
   }
   try {
     const parsed = new URL(url, window.location.origin);
-    if (!image) parsed.hash = '';
+    if (!image || isSkipAnchor(parsed.hash)) parsed.hash = '';
     parsed.pathname = parsed.pathname.replace(/\/+$/, '') || '/';
     return `${prefix}${parsed.href}${suffix}`;
   } catch (error) {
