@@ -128,11 +128,24 @@ function resolveMetadataUrl(meta) {
   return (meta && (meta.url || meta.source)) || '';
 }
 
+const DOCUMENT_EXT = /\.(pdf|docx?|pptx?|xlsx?)$/i;
+
 function labelFromUrl(url) {
   try {
     const parsed = new URL(url, window.location.origin);
     const segments = parsed.pathname.split('/').filter(Boolean);
     if (!segments.length) return url;
+    // Document URLs can end in an id (…/Report.pdf/dc1fa6af-…), so use the file name segment.
+    const file = [...segments].reverse().find((segment) => DOCUMENT_EXT.test(segment));
+    if (file) {
+      const name = decodeURIComponent(file.replace(/\+/g, ' '))
+        .replace(DOCUMENT_EXT, '')
+        .replace(/^\(\w+\)\s*/, '')
+        .replace(/[-_]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (name) return name;
+    }
     const slug = decodeURIComponent(segments[segments.length - 1])
       .replace(/\.(html?|php|aspx?)$/i, '')
       .replace(/[-_]+/g, ' ')
@@ -210,15 +223,28 @@ function renderMarkdownSummary(text) {
   return html;
 }
 
+// Skip-link anchors (page#main-content) point at the same page, so a crawl that indexed
+// them as separate documents would otherwise show the page twice.
+const SKIP_ANCHORS = ['#main-content', '#main', '#content', '#maincontent', '#skip-to-content'];
+
+function isSkipAnchor(hash) {
+  return SKIP_ANCHORS.includes(String(hash).toLowerCase());
+}
+
+function stripSkipAnchor(url) {
+  const index = String(url).indexOf('#');
+  return index >= 0 && isSkipAnchor(url.slice(index)) ? url.slice(0, index) : url;
+}
+
 function renderResultItem(item, layout) {
   const data = item.data || {};
   const meta = data.metadata || {};
   const url = data.source || resolveMetadataUrl(meta);
-  const title = meta.title || url || item.id || 'Untitled';
+  const title = meta.title || (url ? labelFromUrl(url) : '') || item.id || 'Untitled';
   const description = (typeof meta.description === 'string' && meta.description.trim())
     || excerptFromText(data.text, title);
   const image = meta.image || '';
-  const href = isSafeUrl(url) ? url : '#';
+  const href = isSafeUrl(url) ? stripSkipAnchor(url) : '#';
 
   const li = document.createElement('li');
   li.className = 'cmp-content-ai-search__item';
@@ -309,7 +335,7 @@ function resolveResultIdentity(item) {
   }
   try {
     const parsed = new URL(url, window.location.origin);
-    if (!image) parsed.hash = '';
+    if (!image || isSkipAnchor(parsed.hash)) parsed.hash = '';
     parsed.pathname = parsed.pathname.replace(/\/+$/, '') || '/';
     return `${prefix}${parsed.href}${suffix}`;
   } catch (error) {
