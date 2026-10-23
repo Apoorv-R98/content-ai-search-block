@@ -10,8 +10,6 @@ Try a natural-language query such as `How can I make protein coffee at home with
 
 ![Content AI Search block on www.frescopa.coffee/search](docs/content-ai-search-frescopa.png)
 
-_Screenshot of the live page. The live site is built from `markszulc/frescopa26`, which can be behind this repository's `main`; for example, the text-excerpt fallback for results without a description (below) is not live yet._
-
 ## Capabilities
 
 - **Search Results tab**: semantic results from the content source as cards or a list (Cards / List toggle), with a "Searching…" indicator while a query runs and "Load more results" pagination.
@@ -39,10 +37,6 @@ Authored as a two-column table in the block. All keys are optional.
 | `id` | generated | Element id for the block |
 
 The Content AI API key is never in the browser: the block calls a small proxy at `base-url`, which adds the credentials server-side.
-
-## Environments
-- Preview: https://main--content-ai-search-block--Apoorv-R98.aem.page/
-- Live: https://main--content-ai-search-block--Apoorv-R98.aem.live/
 
 ## Documentation
 
