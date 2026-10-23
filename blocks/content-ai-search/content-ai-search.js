@@ -21,6 +21,31 @@ const RESULT_FIELDS = [
   'metadata.image',
   'metadata.meta.image',
 ];
+// Pages without a meta description fall back to the start of their text.
+const EXCERPT_LENGTH = 160;
+const MIN_EXCERPT_LINE = 40;
+
+function stripMarkdown(line) {
+  return line
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^[\s>#*\-+\d.)]+/, '')
+    .replace(/[*_`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function excerptFromText(value, title = '', length = EXCERPT_LENGTH) {
+  if (typeof value !== 'string') return '';
+  const heading = String(title).trim().toLowerCase();
+  const line = value.split('\n')
+    .map(stripMarkdown)
+    .find((l) => l.length >= MIN_EXCERPT_LINE && l.toLowerCase() !== heading);
+  if (!line) return '';
+  if (line.length <= length) return line;
+  const cut = line.slice(0, length);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), 1)).replace(/[\s,;:.-]+$/, '')}…`;
+}
 
 async function fetchMockAnswer() {
   const url = `${window.hlx.codeBasePath}/blocks/content-ai-search/mock-answer.json`;
@@ -190,7 +215,8 @@ function renderResultItem(item, layout) {
   const meta = data.metadata || {};
   const url = data.source || resolveMetadataUrl(meta);
   const title = meta.title || url || item.id || 'Untitled';
-  const description = meta.description || '';
+  const description = (typeof meta.description === 'string' && meta.description.trim())
+    || excerptFromText(data.text, title);
   const image = meta.image || '';
   const href = isSafeUrl(url) ? url : '#';
 
