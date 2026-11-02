@@ -26,6 +26,7 @@ Authored as a two-column table in the block. All keys are optional.
 | Key | Default | Description |
 | --- | --- | --- |
 | `base-url` | none (mock data) | Base URL of the proxy that serves `/search` and `/gensearch` |
+| `stream-url` | none | Optional. Full URL of a proxy for Content AI's `POST /content-sources/gensearch/stream` (Server-Sent Events). When set, AI Mode renders the answer as it is generated. Without it, or if the stream fails before any text, the block uses `/gensearch` and reveals the answer word by word |
 | `content-source` | none | Name of the Content AI content source |
 | `content-source-type` | `AEM_PUBLISH` | Content source type, for example `ACQUISITION` |
 | `placeholder` | `Search…` | Search field placeholder |
@@ -37,6 +38,10 @@ Authored as a two-column table in the block. All keys are optional.
 | `id` | generated | Element id for the block |
 
 The Content AI API key is never in the browser: the block calls a small proxy at `base-url`, which adds the credentials server-side.
+
+### Streaming the AI Mode answer
+
+Set `stream-url` to a proxy that forwards `POST /content-sources/gensearch/stream` and keeps the API key server-side. The proxy must stream the response (no buffering) and answer the CORS preflight for the site's origin. App Builder (Adobe I/O Runtime) web actions return a single buffered response, so they cannot be used for this; a Cloudflare Worker or another pass-through proxy can. The events are `START`, `STREAMING` (the whole answer so far), `END` (final answer and `hits`) and `ERROR`.
 
 ## Documentation
 
